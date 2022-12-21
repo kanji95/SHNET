@@ -38,6 +38,12 @@ def evaluate(
     bce_loss = nn.BCELoss()
 
     data_len = len(val_loader)
+    
+    img_pos_embed = positionalencoding2d(args.batch_size, d_model=args.channel_dim, height=args.feature_dim, width=args.feature_dim)
+    # img_pos_embed = img_pos_embed.flatten(2).permute(2, 0, 1)
+    
+    txt_pos_embed = positionalencoding1d(args.batch_size, d_model=args.channel_dim, max_len=args.phrase_len)
+    # txt_pos_embed = txt_pos_embed.permute(1, 0, 2)
 
     print_(
         "\n================================================= Evaluating only Grounding Network ======================================================="
@@ -49,6 +55,10 @@ def evaluate(
         phrase = batch["phrase"].cuda(non_blocking=True)
         phrase = phrase.squeeze(dim=1)
         phrase_mask = batch["phrase_mask"].cuda(non_blocking=True)
+        # phrase_mask = torch.cat([F.conv1d(phrase_mask[:, None].float(), 1/k*torch.ones(
+        #     1, 1, k), padding=k//2) for k in [1, 3, 5]], dim=-1).cuda(non_blocking=True)
+
+        # phrase_mask = phrase_mask.squeeze(dim=1)
 
         gt_mask = batch["seg_mask"].cuda(non_blocking=True)
         gt_mask = gt_mask.squeeze(dim=1)
@@ -74,7 +84,7 @@ def evaluate(
 
         total_inter += inter.item()
         total_union += union.item()
-        
+
         accuracy = 0
         total_accuracy += accuracy
 
@@ -104,5 +114,5 @@ def evaluate(
         f"{timestamp} Validation: EpochId: {epochId:2d} loss {val_loss:.4f} overall_IOU {val_IOU:.4f} val_acc {val_acc:.4f}"
     )
     print_("============================================================================================================================================\n")
-    
+
     return val_loss, val_IOU

@@ -38,7 +38,7 @@ class MultiHeadAttention(nn.Module):
 
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias)
 
-        self.dummy_param = nn.Parameter(torch.empty(0))
+        # self.dummy_param = nn.Parameter(torch.empty(0))
 
         ## H = W = self.feature_dim
         ## T = self.phrase_len

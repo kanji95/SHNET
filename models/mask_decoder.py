@@ -15,7 +15,7 @@ class MaskDecoder(nn.Module):
 
         self.deconv1 = nn.Sequential(
             nn.Conv2d(
-                512,
+                channel_dim,
                 512,
                 kernel_size=3,
                 stride=1,
@@ -23,8 +23,8 @@ class MaskDecoder(nn.Module):
                 bias=False,
             ),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-            nn.Dropout2d(dropout),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
             self.upsample,
         )
 
@@ -38,8 +38,8 @@ class MaskDecoder(nn.Module):
                 bias=False,
             ),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-            nn.Dropout2d(dropout),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
             self.upsample,
         )
         
@@ -53,8 +53,8 @@ class MaskDecoder(nn.Module):
                 bias=False,
             ),
             nn.BatchNorm2d(512),
-            nn.ReLU(),
-            nn.Dropout2d(dropout),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
             # self.upsample,
         )
 
@@ -68,7 +68,7 @@ class MaskDecoder(nn.Module):
                 bias=False,
             ),
             nn.BatchNorm2d(256),
-            nn.ReLU(),
+            nn.ReLU(inplace=True),
             
             nn.Conv2d(
                 256, 1, kernel_size=3, stride=1, padding=1, bias=True

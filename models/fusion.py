@@ -3,32 +3,47 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-class HCAM(nn.Module):
+class CMMLF(nn.Module):
     def __init__(self, channel_dim, num_regions, dropout):
         super().__init__()
 
         self.num_regions = num_regions
 
-        self.conv_1 = nn.Sequential(
+        self.conv_12 = nn.Sequential(
             nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(channel_dim),
-            nn.Dropout2d(dropout),
+            # nn.Dropout(dropout),
+        )
+        self.conv_13 = nn.Sequential(
+            nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(channel_dim),
+            # nn.Dropout(dropout),
         )
         
-        self.conv_2 = nn.Sequential(
+        self.conv_21 = nn.Sequential(
             nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(channel_dim),
-            nn.Dropout2d(dropout),
+            # nn.Dropout(dropout),
+        )
+        self.conv_23 = nn.Sequential(
+            nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(channel_dim),
+            # nn.Dropout(dropout),
         )
         
-        self.conv_3 = nn.Sequential(
+        self.conv_31 = nn.Sequential(
             nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
             nn.BatchNorm2d(channel_dim),
-            nn.Dropout2d(dropout),
+            # nn.Dropout(dropout),
+        )
+        self.conv_32 = nn.Sequential(
+            nn.Conv2d(channel_dim * 2, channel_dim, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(channel_dim),
+            # nn.Dropout(dropout),
         )
 
         self.conv_3d = nn.Sequential(
-            nn.Conv3d(channel_dim, 512, 3, padding=(0, 1, 1)), nn.BatchNorm3d(512)
+            nn.Conv3d(channel_dim, channel_dim, 3, padding=(0, 1, 1)), nn.BatchNorm3d(channel_dim), nn.ReLU(inplace=True), nn.Dropout(dropout),
         )
 
     def forward(self, level_features, H, W, phrase_mask):
@@ -46,24 +61,24 @@ class HCAM(nn.Module):
         v1, v2, v3 = visual_features.view(B, N, C, H, W).unbind(dim=1)
         l1, l2, l3 = textual_features.unbind(dim=1)
 
-        v12 = self.conv_1(
+        v12 = self.conv_12(
             torch.cat([v1, l2[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
-        v13 = self.conv_1(
+        v13 = self.conv_13(
             torch.cat([v1, l3[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
 
-        v21 = self.conv_2(
+        v21 = self.conv_21(
             torch.cat([v2, l1[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
-        v23 = self.conv_2(
+        v23 = self.conv_23(
             torch.cat([v2, l3[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
 
-        v31 = self.conv_3(
+        v31 = self.conv_31(
             torch.cat([v3, l1[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
-        v32 = self.conv_3(
+        v32 = self.conv_32(
             torch.cat([v3, l2[:, :, None, None].expand(B, C, H, W)], dim=1)
         ).sigmoid()
 
@@ -127,7 +142,6 @@ class TGFE(nn.Module):
         
     def lang_se(self, visual_feat, lang_feat):
         """[summary]
-
         Args:
             visual_feat : B x C x H x W
             lang_feat   : B x C x 1 x 1
@@ -143,7 +157,6 @@ class TGFE(nn.Module):
         
     def global_vec(self, visual_feat, lang_feat):
         """[summary]
-
         Args:
             visual_feat : B x C x H x W
             lang_feat   : B x C x 1 x 1
@@ -269,5 +282,3 @@ class GBFM(nn.Module):
         out = self.out_conv(out)
         
         return out
-        
-        

@@ -32,7 +32,7 @@ from utilities import im_processing
 from utilities.utils import log_gpu_usage, print_
 from utilities.metrics import compute_mask_IOU
 
-from skimage.transform import resize
+# from skimage.transform import resize
 # from memory_profiler import profile
 
 def get_args_parser():
@@ -48,7 +48,7 @@ def get_args_parser():
     parser.add_argument("--grad_check", default=False, action="store_true")
 
     ## DCRF
-    parser.add_argument("--dcrf", default=False, action="store_true")
+    parser.add_argument("--use_dcrf", default=False, action="store_true")
 
     # MODEL Params
     parser.add_argument(
@@ -68,18 +68,19 @@ def get_args_parser():
     )
     parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--num_encoder_layers", type=int, default=2)
-    parser.add_argument("--sfm_dim", default=256, type=int)
+    parser.add_argument("--transformer_dim", default=256, type=int)
     parser.add_argument("--feature_dim", default=14, type=int)
     parser.add_argument("--dropout", default=0.3, type=float)
+    parser.add_argument("--attn_type", type=str, default="normal", choices=["normal", "linear", "cross", "multimodal", "context", "linear_context"])
 
     ## Evalute??
     parser.add_argument("--model_path", default="model_unc.pth", type=str)
 
     parser.add_argument(
-        "--dataroot", type=str, default="<data_path>"
+        "--dataroot", type=str, default="/ssd_scratch/cvit/kanishk/referit/"
     )
     parser.add_argument(
-        "--glove_path", default="<glove_path>", type=str
+        "--glove_path", default="/ssd_scratch/cvit/kanishk/glove/", type=str
     )
     parser.add_argument(
         "--task",
@@ -92,6 +93,7 @@ def get_args_parser():
             "referit",
         ],
     )
+    parser.add_argument("--split", default="val", type=str)
     parser.add_argument("--cache_type", type=str, default="full")
     parser.add_argument("--image_dim", type=int, default=448)
     parser.add_argument("--mask_dim", type=int, default=56)
@@ -133,6 +135,10 @@ def evaluate(image_encoder, joint_model, val_loader, args):
 
         orig_phrase = batch["orig_phrase"][0]
 
+        ## if "the right half of the sandwich" not in orig_phrase:
+        ##      continue
+        ## print(orig_phrase)
+
         phrase = batch["phrase"].cuda(non_blocking=True)
         phrase_mask = batch["phrase_mask"].cuda(non_blocking=True)
         index = batch["index"]
@@ -150,7 +156,8 @@ def evaluate(image_encoder, joint_model, val_loader, args):
 
         with torch.no_grad():
             img = image_encoder(image)
-        output_mask, _ = joint_model(img, phrase, img_mask, phrase_mask)
+            
+        output_mask = joint_model(img, phrase, img_mask, phrase_mask)
 
         end = time()
         torch.cuda.synchronize()
@@ -160,25 +167,55 @@ def evaluate(image_encoder, joint_model, val_loader, args):
 
         output_mask = output_mask.detach().cpu()
 
-        # if args.use_dcrf:
+        if args.use_dcrf:
 
-        #     orig_image = image[0].cpu().permute(1, 2, 0).mul_(std).add_(mean).numpy()
+            ## orig_image = batch["orig_image"].numpy()
+            ### img_path = batch["img_path"][0]
+            ### orig_image = Image.open(img_path).convert("RGB").resize((args.image_dim, args.image_dim))
+            ### orig_image = np.array(orig_image)
             
-        #     proc_im = skimage.img_as_ubyte(orig_image)
-        #     H, W = orig_image.shape[:-1]
+            orig_image = image[0].cpu().permute(1, 2, 0).mul_(std).add_(mean).numpy()
+            
+            ## orig_image = resize(orig_image, (args.image_dim, args.image_dim), anti_aliasing=True)
+            proc_im = skimage.img_as_ubyte(orig_image)
+            # orig_image = np.uint8(orig_image * 255)
 
-        #     sigma_val = (output_mask > args.threshold).float()[0]  
-        #     mask_pred = np.stack([1 - sigma_val, sigma_val], axis=-1)
-        #     bilateral_wt = 10
-        #     alpha = 20
-        #     beta = 10
-        #     spatial_wt = 5
-        #     gamma = 3
-        #     num_it = 5
-        #     param = (bilateral_wt, alpha, beta, spatial_wt, gamma, num_it) 
-        #     pred_raw_dcrf = denseCRF.densecrf(proc_im, mask_pred, param)
+            ## H, W = orig_image[0].shape[:-1]
+            H, W = orig_image.shape[:-1]
 
-        #     dcrf_output_mask = torch.from_numpy(pred_raw_dcrf).unsqueeze(0)
+            ## sigma_val = output_mask[0]
+            ## sigma_val = (output_mask > output_mask.mean()).float()[0]
+            sigma_val = (output_mask > args.threshold).float()[0]  
+
+            ## n_labels = 2
+            ## d = dcrf.DenseCRF2D(H, W, n_labels)
+            ## U = np.expand_dims(-np.log(sigma_val), axis=0)
+            ## U_ = np.expand_dims(-np.log(1 - sigma_val), axis=0)
+            ## unary = np.concatenate((U_, U), axis=0)
+            ## unary = unary.reshape((2, -1))
+            ## d.setUnaryEnergy(unary)
+            ## d.addPairwiseGaussian(sxy=3, compat=5)
+            ## d.addPairwiseBilateral(sxy=20, srgb=10, rgbim=proc_im, compat=10)
+            ## Q = d.inference(5)
+            ## pred_raw_dcrf = np.argmax(Q, axis=0).reshape((H, W)).astype(np.float32)
+
+            mask_pred = np.stack([1 - sigma_val, sigma_val], axis=-1)
+            ## bilateral_wt = 1 # 10
+            ## alpha = 5 # 20
+            ## beta = 1 # 3
+            ## spatial_wt = 1 # 3
+            ## gamma = 2 # 3
+            ## num_it = 5
+            bilateral_wt = 10
+            alpha = 20
+            beta = 10
+            spatial_wt = 5
+            gamma = 3
+            num_it = 5
+            param = (bilateral_wt, alpha, beta, spatial_wt, gamma, num_it) 
+            pred_raw_dcrf = denseCRF.densecrf(proc_im, mask_pred, param)
+
+            dcrf_output_mask = torch.from_numpy(pred_raw_dcrf).unsqueeze(0)
 
         inter, union = compute_mask_IOU(output_mask, gt_mask, args.threshold)
 
@@ -186,6 +223,8 @@ def evaluate(image_encoder, joint_model, val_loader, args):
         total_union += union.item()
 
         score = inter.item() / union.item()
+        ## if score > 0.95:
+        ##     print(orig_phrase, index.item(), score)
 
         mean_IOU += score
 
@@ -196,24 +235,27 @@ def evaluate(image_encoder, joint_model, val_loader, args):
                 prec_at_x[x] += 1
 
         total_dcrf_score = 0
-        # if args.use_dcrf:
-        #     dcrf_inter, dcrf_union = compute_mask_IOU(
-        #         dcrf_output_mask, gt_mask, args.threshold
-        #     )
+        if args.use_dcrf:
+            dcrf_inter, dcrf_union = compute_mask_IOU(
+                dcrf_output_mask, gt_mask, args.threshold
+            )
 
-        #     total_dcrf_inter += dcrf_inter.item()
-        #     total_dcrf_union += dcrf_union.item()
+            total_dcrf_inter += dcrf_inter.item()
+            total_dcrf_union += dcrf_union.item()
 
-        #     dcrf_score = dcrf_inter.item() / dcrf_union.item()
+            dcrf_score = dcrf_inter.item() / dcrf_union.item()
 
-        #     mean_dcrf_IOU += dcrf_score
+            mean_dcrf_IOU += dcrf_score
 
-        #     total_dcrf_score = total_dcrf_inter / total_dcrf_union
+            total_dcrf_score = total_dcrf_inter / total_dcrf_union
 
-        #     for x in prec_dcrf_at_x:
-        #         if dcrf_score > x:
-        #             prec_dcrf_at_x[x] += 1
-                    
+            for x in prec_dcrf_at_x:
+                if dcrf_score > x:
+                    prec_dcrf_at_x[x] += 1
+ 
+        ## if step > 2000:
+        ##     break
+
         if step % 500 == 0:
 
             timestamp = datetime.now().strftime("%Y|%m|%d-%H:%M")
@@ -282,11 +324,11 @@ def main():
     return_layers = {"layer2": "layer2", "layer3": "layer3", "layer4": "layer4"}
 
     if args.image_encoder == "resnet50" or args.image_encoder == "resnet101":
-        stride = 1
+        stride = [1, 1, 1]
         model = torch.hub.load(
             "pytorch/vision:v0.6.1", args.image_encoder, pretrained=True
         )
-        image_encoder = nn.Sequential(*list(model.children())[:-2])
+        image_encoder = IntermediateLayerGetter(model, return_layers)
     elif args.image_encoder == "deeplabv2":
         stride = 2
         model = torch.hub.load(
@@ -298,13 +340,13 @@ def main():
         return_layers = {"layer3": "layer2", "layer4": "layer3", "layer5": "layer4"}
         image_encoder = IntermediateLayerGetter(model.base, return_layers)
     elif args.image_encoder == "deeplabv3_resnet101":
-        stride = 2
+        stride = [1, 1, 1]
         model = torch.hub.load(
             "pytorch/vision:v0.6.1", args.image_encoder, pretrained=True
         )
         image_encoder = IntermediateLayerGetter(model.backbone, return_layers)
     elif args.image_encoder == "deeplabv3_plus":
-        stride = 2
+        stride = [1, 1, 1]
         model = DeepLab(num_classes=21, backbone="resnet", output_stride=16)
         model.load_state_dict(
             torch.load("./models/deeplab-resnet.pth.tar")["state_dict"]
@@ -319,7 +361,7 @@ def main():
 
     joint_model = JointModel(
         args,
-        sfm_dim=args.sfm_dim,
+        transformer_dim=args.transformer_dim,
         out_channels=args.channel_dim,
         stride=stride,
         num_layers=args.num_layers,

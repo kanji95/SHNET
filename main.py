@@ -23,6 +23,9 @@ from models.modeling.deeplab import *
 
 from models.deeplabv2 import DeepLabV2
 
+from models.net.deeplabv3plus import deeplabv3plus
+# from models.net.config import cfg
+
 from dataloader.referit_loader import *
 
 from evaluate import evaluate
@@ -51,7 +54,7 @@ def get_args_parser():
     parser.add_argument("--weight_decay", default=1e-3, type=float)
     parser.add_argument("--epochs", default=10, type=int)
     parser.add_argument("--gamma", default=0.7, type=float)
-    parser.add_argument("--optimizer", default="AdamW", type=str)
+    parser.add_argument("--optimizer", default="AdamW", choices=["AdamW", "Adam", "SGD"], type=str)
     parser.add_argument("--num_workers", type=int, default=4, help="number of workers")
     parser.add_argument("--grad_check", default=False, action="store_true")
 
@@ -71,12 +74,14 @@ def get_args_parser():
             "deeplabv2",
             "deeplabv3_resnet101",
             "deeplabv3_plus",
+            "deeplab_coco",
             "dino",
         ],
     )
+    parser.add_argument("--attn_type", type=str, default="normal", choices=["normal", "linear", "cross", "multimodal", "context", "linear_context"])
     parser.add_argument("--num_layers", type=int, default=1)
     parser.add_argument("--num_encoder_layers", type=int, default=2)
-    parser.add_argument("--sfm_dim", default=256, type=int)
+    parser.add_argument("--transformer_dim", default=256, type=int)
     parser.add_argument("--feature_dim", default=14, type=int)
     parser.add_argument("--dropout", default=0.3, type=float)
 
@@ -92,10 +97,10 @@ def get_args_parser():
     parser.add_argument("--run_name", default="", type=str)
 
     parser.add_argument(
-        "--dataroot", type=str, default="<data_path>"
+        "--dataroot", type=str, default="/ssd_scratch/cvit/kanishk/referit/"
     )
     parser.add_argument(
-        "--glove_path", default="<glove_path>", type=str
+        "--glove_path", default="/ssd_scratch/cvit/kanishk/glove/", type=str
     )
     parser.add_argument(
         "--task",
@@ -121,14 +126,14 @@ def get_args_parser():
 
 def main(args):
 
-    experiment = wandb.init(project="referring_segmentation", config=args)
+    experiment = wandb.init(project="referring_image_segmentation", config=args)
     if args.run_name == "":
         print_("No Name Provided, Using Default Run Name")
         args.run_name = f"{experiment.id}"
-    args.run_name = f'{args.task}_{args.image_encoder}_{args.run_name}_tl_{args.num_encoder_layers}_td_{args.sfm_dim}_id_{args.image_dim}_md_{args.mask_dim}_sl_{args.phrase_len}_' + args.run_name
+    args.run_name = f'{args.task}_{args.run_name}_{experiment.id}'
     print_(f"METHOD USED FOR CURRENT RUN {args.run_name}")
     experiment.name = args.run_name
-    wandb.run.save()
+    # wandb.run.save()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     n_gpu = torch.cuda.device_count()
@@ -139,13 +144,13 @@ def main(args):
     return_layers = {"layer2": "layer2", "layer3": "layer3", "layer4": "layer4"}
 
     if args.image_encoder == "resnet50" or args.image_encoder == "resnet101":
-        stride = 2
+        stride = [1, 1, 1]
         model = torch.hub.load(
             "pytorch/vision:v0.6.1", args.image_encoder, pretrained=True
         )
         image_encoder = IntermediateLayerGetter(model, return_layers)
     elif args.image_encoder == "deeplabv2":
-        stride = 2
+        stride = [1, 1, 1]
         model = DeepLabV2(n_classes=181, n_blocks=[3, 4, 23, 3], atrous_rates=[6, 12, 18, 24])
         
         state_dict = torch.load("./models/deeplabv1_resnet101-coco.pth", map_location=lambda storage, loc: storage)
@@ -155,20 +160,28 @@ def main(args):
         return_layers = {"layer3": "layer2", "layer4": "layer3", "layer5": "layer4"}
         image_encoder = IntermediateLayerGetter(model, return_layers)
     elif args.image_encoder == "deeplabv3_resnet101":
-        stride = 2
+        stride = [1, 1, 1]
         model = torch.hub.load(
             "pytorch/vision:v0.6.1", args.image_encoder, pretrained=True
         )
         image_encoder = IntermediateLayerGetter(model.backbone, return_layers)
     elif args.image_encoder == "deeplabv3_plus":
-        stride = 2
+        stride = [1, 1, 1]
         model = DeepLab(num_classes=21, backbone="resnet", output_stride=16)
         model.load_state_dict(
             torch.load("./models/deeplab-resnet.pth.tar")["state_dict"]
         )
         image_encoder = IntermediateLayerGetter(model.backbone, return_layers)
+    # elif args.image_encoder == "deeplab_coco":
+    #     # import pdb; pdb.set_trace()
+    #     stride = 2
+    #     model = deeplabv3plus(cfg)
+    #     checkpoint = torch.load("./models/deeplabv3_plus_res101_atrous_coco_updated.pth")
+    #     checkpoint = {k.replace("module.", ""): v for k,v in checkpoint.items()}
+    #     model.load_state_dict(checkpoint)
+    #     image_encoder = IntermediateLayerGetter(model.backbone, return_layers)
     elif args.image_encoder == "dino":
-        stride = 2
+        stride = [1, 1, 1]
         resnet50 = torch.hub.load('facebookresearch/dino:main', 'dino_resnet50', force_reload=True)
         image_encoder = IntermediateLayerGetter(resnet50, return_layers)
     else:
@@ -180,7 +193,7 @@ def main(args):
 
     joint_model = JointModel(
         args,
-        sfm_dim=args.sfm_dim,
+        transformer_dim=args.transformer_dim,
         out_channels=args.channel_dim,
         stride=stride,
         num_layers=args.num_layers,
@@ -208,8 +221,16 @@ def main(args):
     image_encoder.to(device)
 
     params = list([p for p in joint_model.parameters() if p.requires_grad])
-
-    optimizer = AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    
+    print(f"Using {args.optimizer} optimizer!!")
+    cycle_momentum = False
+    if args.optimizer == "AdamW":
+        optimizer = AdamW(params, lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer == "Adam":
+        optimizer = Adam(params, lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optimizer == "SGD":
+        cycle_momentum = True
+        optimizer = SGD(params, lr=args.lr, momentum=0.8, weight_decay=args.weight_decay)
 
     save_path = os.path.join(args.model_dir, args.task)
     if not os.path.exists(save_path):
@@ -281,18 +302,25 @@ def main(args):
     elapsed = end - start
     print_(f"Elapsed time for loading dataloader is {elapsed}sec")
 
+    num_iter = len(train_loader)
+    print_(f"training iterations {num_iter}")
+
     # Learning Rate Scheduler
+    # lr_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.gamma, verbose=True)
+    ### lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=args.gamma, verbose=True)
+
     lr_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         factor=args.gamma,
         patience=2,
         threshold=1e-3,
-        min_lr=1e-8,
+        min_lr=1e-6,
         verbose=True,
     )
+    
+    # lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=args.lr, epochs=args.epochs, steps_per_epoch=num_iter, pct_start=0.2, cycle_momentum=cycle_momentum, div_factor=10, final_div_factor=10)
+    # lr_scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.lr, max_lr=1.2e-4, step_size_up=num_iter//2, cycle_momentum=cycle_momentum)
 
-    num_iter = len(train_loader)
-    print_(f"training iterations {num_iter}")
 
     print_(
         f"===================== SAVING MODEL TO FILE {model_filename}! ====================="
@@ -304,7 +332,7 @@ def main(args):
     for epochId in range(args.epochs):
 
         train(train_loader, joint_model, image_encoder, 
-                optimizer, experiment, epochId,
+                optimizer, lr_scheduler, experiment, epochId,
                 args)
 
         val_loss, val_acc = evaluate(val_loader, joint_model, image_encoder,
@@ -312,7 +340,10 @@ def main(args):
 
         wandb.log({"val_loss": val_loss, "val_IOU": val_acc})
 
-        lr_scheduler.step(val_loss)
+        if isinstance(lr_scheduler, torch.optim.lr_scheduler.ExponentialLR) or isinstance(lr_scheduler, torch.optim.lr_scheduler.StepLR):
+            lr_scheduler.step()
+        elif isinstance(lr_scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+            lr_scheduler.step(val_loss)
 
         if val_acc > best_acc:
             best_acc = val_acc
@@ -332,6 +363,11 @@ def main(args):
             epochs_without_improvement += 1
             print_(f"Epochs without Improvement: {epochs_without_improvement}")
 
+            # if epochs_without_improvement % 2 == 0:
+            #     current_max_lr = lr_scheduler.max_lrs[0]
+            #     print_(f"Reducing Max_lr for scheduler from {current_max_lr:.5f} to {current_max_lr*args.gamma:.5f}")
+            #     lr_scheduler.max_lrs[0] = current_max_lr*args.gamma
+
             if epochs_without_improvement == 6:
                 print_(
                     f"{epochs_without_improvement} epochs without improvement, Stopping Training!"
@@ -342,7 +378,8 @@ def main(args):
         print_(f"Current Run Name {args.run_name}")
         best_acc_filename = os.path.join(
             save_path,
-            f"{args.image_encoder}_{args.task}_tl_{args.num_encoder_layers}_td_{args.sfm_dim}_fd_{args.feature_dim}_id_{args.image_dim}_md_{args.mask_dim}_sl_{args.phrase_len}_{best_acc:.5f}.pth",
+            # f"{args.image_encoder}_{args.task}_tl_{args.num_encoder_layers}_td_{args.transformer_dim}_fd_{args.feature_dim}_id_{args.image_dim}_md_{args.mask_dim}_sl_{args.phrase_len}_{best_acc:.5f}.pth",
+            f"{args.run_name}_{best_acc:.5f}.pth"
         )
         os.rename(model_filename, best_acc_filename)
 

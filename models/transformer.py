@@ -7,12 +7,16 @@ from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.multi_head_attention import *
+from einops import rearrange
 
-class SFM(nn.Module):
-    def __init__(self, sfm_layer, num_layers, norm=None):
+# from models.multi_head_attention import *
+from models.attention import *
+from .linear_attention import *
+
+class TransformerEncoder(nn.Module):
+    def __init__(self, encoder_layer, num_layers, norm=None):
         super().__init__()
-        self.layers = _get_clones(sfm_layer, num_layers)
+        self.layers = _get_clones(encoder_layer, num_layers)
         self.num_layers = num_layers
         self.norm = norm
 
@@ -40,7 +44,7 @@ class SFM(nn.Module):
         return output
 
 
-class SFMLayer(nn.Module):
+class TransformerEncoderLayer(nn.Module):
     def __init__(
         self,
         args,
@@ -52,8 +56,23 @@ class SFMLayer(nn.Module):
         normalize_before=False,
     ):
         super().__init__()
-        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
-        ## self.self_attn = MultiHeadAttention(args, d_model, nhead, dropout)
+        
+        self.attn_type = args.attn_type
+        num_regions = args.feature_dim**2
+        phrase_len = args.phrase_len
+        
+        seq_len = num_regions + phrase_len
+        # channels = args.channel_dim
+        
+        if self.attn_type == "normal":
+            self.multihead_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout)
+        elif self.attn_type == "linear":
+            self.multihead_attn = LinearMultiheadAttention(d_model, nhead, dropout=dropout, seq_len=seq_len, proj_k=64)
+        elif self.attn_type == "context":
+            self.multihead_attn = ContextAwareAttention(d_model, nhead, num_regions=num_regions, dropout=dropout)
+        else:
+            raise NotImplemented(f'{self.attn_type} not implemented!!')
+        
         # Implementation of Feedforward model
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -79,8 +98,12 @@ class SFMLayer(nn.Module):
         pos: Optional[Tensor] = None,
     ):
         query = key = self.with_pos_embed(src, pos)
-        src2 = self.self_attn(query, key, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
-        ## src2 = self.self_attn(query, key_padding_mask=src_key_padding_mask)
+        if self.attn_type == "normal":
+            src2 = self.multihead_attn(query, key, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
+        elif self.attn_type == "linear":
+            src2 = self.multihead_attn(query, key, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
+        elif self.attn_type == "context":
+            src2 = self.multihead_attn(query, key, value=src, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
         src = src + self.dropout1(src2)
         src = self.norm1(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src))))
@@ -99,8 +122,12 @@ class SFMLayer(nn.Module):
         # import pdb; pdb.set_trace();
         src2 = self.norm1(src)
         query = key = self.with_pos_embed(src2, pos)
-        src2 = self.self_attn(query, key, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
-        ## src2 = self.self_attn(query, key_padding_mask=src_key_padding_mask)
+        if self.attn_type == "normal":
+            src2 = self.multihead_attn(query, key, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
+        elif self.attn_type == "linear":
+            src2 = self.multihead_attn(query, key, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)[0]
+        elif self.attn_type == "context":
+            src2 = self.multihead_attn(query, key, value=src2, attn_mask=src_mask, key_padding_mask=src_key_padding_mask)
         src = src + self.dropout1(src2)
         src2 = self.norm2(src)
         src2 = self.linear2(self.dropout(self.activation(self.linear1(src2))))
